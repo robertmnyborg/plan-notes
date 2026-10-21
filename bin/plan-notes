@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""plan-notes list|diff|view <plan.md> — notes on a block of a markdown plan.
+
+Write a note in any editor as its own line starting with `@@`, directly under the
+block it is about. `list` prints each note with the heading and block it sits
+on (exit 1 when there are none). `diff` shows what changed since you last ran
+`diff` on that plan, then marks the current version read. `view` opens a
+GitHub-style split diff in the browser: last-read version left, current right,
+whole document, changed words highlighted. Click + on a right-hand line to add a
+note after it. It reloads when the file changes, so a /plan-notes revision
+appears live; Mark read moves the left side forward.
+The /plan-notes skill revises the plan against every note in one pass.
+Why: notes on the block beat chat re-prompts (2026-10-04).
+"""
+import difflib, re, subprocess, sys
+from pathlib import Path
+
+
+def notes(plan: Path) -> int:
+    heading, block, found = "(top)", "", 0
+    for n, line in enumerate(plan.read_text().splitlines(), 1):
+        s = line.strip()
+        if s.startswith("@@"):
+            found += 1
+            print(f"N{found} line {n} | {heading}\n   on: {block[:160]}\n   note: {s[2:].strip()}\n")
+        elif s.startswith("#"):
+            heading, block = s, s
+        elif s:
+            block = s
+    return 0 if found else 1
+
+
+def diff(plan: Path) -> int:
+    snap = plan.with_name(f".{plan.name}.lastread")
+    if not snap.exists():
+        print(f"first read of {plan.name}; marked read")
+    else:
+        subprocess.run(["git", "--no-pager", "diff", "--no-index", "--color",
+                        str(snap), str(plan)])
+    snap.write_text(plan.read_text())
+    return 0
+
+
+def words(a: str, b: str) -> tuple[list, list]:
+    """Split two lines into [text, changed] segments for in-line highlighting."""
+    ta, tb = re.findall(r"\s+|\w+|[^\w\s]", a), re.findall(r"\s+|\w+|[^\w\s]", b)
+    sm = difflib.SequenceMatcher(None, ta, tb, autojunk=False)
+    if sm.ratio() < 0.4:  # mostly rewritten: word marks would be noise
+        return [[a, False]], [[b, False]]
+    la, lb = [], []
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if i2 > i1:
+            la.append(["".join(ta[i1:i2]), op != "equal"])
+        if j2 > j1:
+            lb.append(["".join(tb[j1:j2]), op != "equal"])
+    return merge(la), merge(lb)
+
+
+def merge(segs: list) -> list:
+    """Fold a whitespace-only gap between two changes into one highlighted run."""
+    out = []
+    for i, (t, ch) in enumerate(segs):
+        if not ch and not t.strip() and 0 < i < len(segs) - 1 and segs[i - 1][1] and segs[i + 1][1]:
+            ch = True
+        if out and out[-1][1] == ch:
+            out[-1][0] += t
+        else:
+            out.append([t, ch])
+    return out
+
+
+def state(plan: Path) -> dict:
+    """GitHub-style split rows: last-read version left, current version right."""
+    new = plan.read_text().splitlines()
+    snap = plan.with_name(f".{plan.name}.lastread")
+    old = snap.read_text().splitlines() if snap.exists() else new
+    rows = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        for k in range(max(i2 - i1, j2 - j1)):
+            l = i1 + k if i1 + k < i2 else None
+            r = j1 + k if j1 + k < j2 else None
+            ls = [[old[l], False]] if l is not None else None
+            rs = [[new[r], False]] if r is not None else None
+            if op == "replace" and l is not None and r is not None:
+                ls, rs = words(old[l], new[r])
+            rows.append({"t": op, "ln": None if l is None else l + 1, "rn": None if r is None else r + 1,
+                         "l": ls, "r": rs})
+    return {"name": plan.name, "path": str(plan.resolve()).replace(str(Path.home()), "~"),
+            "mtime": plan.stat().st_mtime, "first": not snap.exists(), "rows": rows,
+            "sections": outline(new, None if not snap.exists() else old), "roles": [r for r, _ in ROLES]}
+
+
+META = re.compile(r"^<!--\s*(purpose|group):\s*(.*?)\s*-->$")
+# Plan roles in reading order; a section without a group comment gets the first
+# role whose pattern matches its heading.
+ROLES = [("Goal", r"goal|objective|why|problem|outcome"), ("Context", r"context|background|current|anchor|already"),
+         ("Inputs", r"input|data|source|depend|prereq"), ("Logic", r"logic|approach|design|method|how|architecture|rule"),
+         ("Outputs", r"output|deliverable|result|artifact"), ("Validation", r"validat|verif|test|success|criteria|done"),
+         ("Steps", r"step|task|phase|milestone|rollout|run it|sequence"), ("Risks", r"risk|question|unknown|assumption|non-goal")]
+
+
+def role(title: str) -> str:
+    return next((name for name, pat in ROLES if re.search(pat, title, re.I)), "")
+
+
+def spans(lines: list[str]) -> list[int]:
+    """Start lines of the plan's sections: the shallowest heading level used twice."""
+    heads, fence = [], False
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("```"):
+            fence = not fence
+        elif not fence and re.match(r"#{1,6} ", line):
+            heads.append((i, len(line) - len(line.lstrip("#"))))
+    levels = [l for _, l in heads]
+    lvl = min((l for l in levels if levels.count(l) > 1), default=min(levels, default=0))
+    return [i for i, l in heads if l == lvl]
+
+
+def chunks(lines: list[str]) -> tuple[list[str], list[list[str]]]:
+    st = spans(lines)
+    if not st:
+        return lines, []
+    return lines[:st[0]], [lines[a:b] for a, b in zip(st, st[1:] + [len(lines)])]
+
+
+def outline(lines: list[str], old) -> list[dict]:
+    def info(c):
+        meta = dict(m.groups() for l in c if (m := META.match(l.strip())))
+        text = [l for l in c[1:] if l.strip() and not META.match(l.strip()) and not l.strip().startswith("@@")]
+        title = c[0].lstrip("#").strip()
+        return {"title": title, "purpose": meta.get("purpose", ""),
+                "group": meta.get("group") or role(title), "inferred": "group" not in meta, "words": sum(len(l.split()) for l in text),
+                "preview": text[0].strip()[:160] if text else "",
+                "notes": [l.strip()[2:].strip() for l in c if l.strip().startswith("@@")], "body": "\n".join(text)}
+    secs = [info(c) for c in chunks(lines)[1]]
+    prev = {i["title"]: (k, i["body"]) for k, i in enumerate(info(c) for c in chunks(old)[1])} if old else {}
+    common = [x["title"] for x in secs if x["title"] in prev]
+    old_order = sorted(common, key=lambda t: prev[t][0])
+    stayed = {t for a, _, size in difflib.SequenceMatcher(None, common, old_order).get_matching_blocks()
+              for t in common[a:a + size]}
+    for x in secs:
+        body, p, t = x.pop("body"), prev.get(x["title"]), x["title"]
+        if not old:
+            x["status"] = ""
+        elif not p:
+            x["status"] = "new"
+        elif p[1] != body:
+            x["status"] = "edited"
+        else:
+            x["status"] = "" if t in stayed else "moved"
+    return secs
+
+
+def section(plan: Path, req: dict) -> None:
+    """Reorder a section, set its purpose/group comment, or add a note under its heading."""
+    head, cs = chunks(plan.read_text().splitlines())
+    cs = [c[:len(c) - next((k for k, l in enumerate(reversed(c)) if l.strip()), 0)] for c in cs]
+    k = req["index"]
+    if req["op"] == "move":
+        cs.insert(req["to"], cs.pop(k))
+    else:
+        c = cs[k]
+        end = 1 + next((j for j, l in enumerate(c[1:]) if not META.match(l.strip())), len(c) - 1)
+        if req["op"] == "note":
+            c.insert(end, "@@ " + " ".join(req["text"].split()))
+        else:
+            key, val = req["op"], " ".join(req["text"].split())
+            hit = [j for j in range(1, end) if META.match(c[j].strip()).group(1) == key]
+            line = f"<!-- {key}: {val} -->"
+            if hit:
+                c[hit[0]:hit[0] + 1] = [line] if val else []
+            elif val:
+                c.insert(1, line)
+    head = head[:len(head) - next((k for k, l in enumerate(reversed(head)) if l.strip()), 0)]
+    out = (head + [""] if head else []) + [l for c in cs for l in c + [""]]
+    plan.write_text("\n".join(out).rstrip("\n") + "\n")
+
+
+def edit(plan: Path, req: dict) -> None:
+    """Insert an @@ note after line `after`, or delete the @@ line `delete` (1-based)."""
+    lines = plan.read_text().splitlines()
+    if "text" in req:
+        lines.insert(req["after"], "@@ " + " ".join(req["text"].split()))
+    elif lines[req["delete"] - 1].strip().startswith("@@"):
+        del lines[req["delete"] - 1]
+    plan.write_text("\n".join(lines) + "\n")
+
+
+
+def view(plan: Path) -> int:
+    import json, webbrowser
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    page = (Path(__file__).resolve().parent / "plan-notes-view.html").read_bytes()
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+
+        def send(self, data: bytes, ctype: str) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            if self.path == "/state":
+                self.send(json.dumps(state(plan)).encode(), "application/json")
+            else:
+                self.send(page, "text/html; charset=utf-8")
+
+        def do_POST(self):
+            req = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
+            if self.path == "/read":
+                plan.with_name(f".{plan.name}.lastread").write_text(plan.read_text())
+            elif self.path == "/section":
+                section(plan, req)
+            else:
+                edit(plan, req)
+            self.send(json.dumps(state(plan)).encode(), "application/json")
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    srv.timeout = 600  # the open page polls every 1.5s; exit 10 min after the tab closes
+    url = f"http://127.0.0.1:{srv.server_port}/"
+    print(f"{plan.name} -> {url}  (Ctrl-C to stop)", flush=True)
+    webbrowser.open(url)
+    try:
+        srv.handle_timeout = lambda: sys.exit(0)
+        while True:
+            srv.handle_request()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    cmds = {"list": notes, "diff": diff, "view": view}
+    if len(sys.argv) != 3 or sys.argv[1] not in cmds:
+        sys.exit("usage: plan-notes list|diff|view <plan.md>")
+    sys.exit(cmds[sys.argv[1]](Path(sys.argv[2])))

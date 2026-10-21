@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""plan-decisions <plan.md> [--ledger PATH] — pull the decisions out of a plan and
+append them to the project's decision-ledger.md. A decision that reverses an
+active one marks the old entry superseded and lands under "Unread reversals"
+until you delete that line.
+
+Ledger: $PLAN_NOTES_LEDGER if set; else <projects>/<project>/decision-ledger.md,
+where <projects> is $PLAN_NOTES_PROJECTS (default ~/Projects) and <project> is
+the first folder under it above the plan; otherwise <projects>/_general/.
+Extraction is a model estimate; IDs, status flips, and file writes are code.
+Why: a decision reversed months later should show both sides (2026-10-04).
+"""
+import argparse, fcntl, json, os, re, subprocess, sys
+from datetime import date
+from pathlib import Path
+
+PROJECTS = Path(os.environ.get("PLAN_NOTES_PROJECTS", Path.home() / "Projects")).expanduser().resolve()
+HEAD = re.compile(r"^### (D-\d{4}) · (.+?) · (\d{4}-\d{2}-\d{2}) · (.+)$", re.M)
+SKELETON = """# Decision ledger — {name}
+
+Append-only. `plan-decisions` writes it from saved plans. Delete a line
+under Unread reversals once you have read both decisions.
+
+## Unread reversals
+
+## Decisions
+"""
+
+PROMPT = """Extract the DECISIONS this plan commits to: a choice between options, with the
+reason. Skip tasks, steps, and facts. Skip a decision the ledger below already
+records with the same meaning from this same plan file. For each new decision, set
+"reverses" to the ID of an ACTIVE ledger entry it contradicts, or null. Reuse an existing domain name when one fits; otherwise
+name a short lowercase domain (e.g. auth, data-model, pricing).
+
+Reply with JSON only, no prose:
+{{"decisions": [{{"domain": "", "decision": "", "why": "", "rejected": "", "reverses": null}}]}}
+
+--- LEDGER ---
+{ledger}
+--- PLAN ({source}) ---
+{plan}"""
+
+
+def ledger_path(plan: Path) -> Path:
+    if os.environ.get("PLAN_NOTES_LEDGER"):
+        return Path(os.environ["PLAN_NOTES_LEDGER"]).expanduser()
+    try:
+        name = plan.resolve().relative_to(PROJECTS).parts[0]
+    except ValueError:
+        name = "_general"
+    return PROJECTS / name / "decision-ledger.md"
+
+
+def entries(text: str) -> list[str]:
+    out = []
+    for m in HEAD.finditer(text):
+        body = text[m.end():].split("\n### ", 1)[0]
+        dec = body.split("**Decision:** ", 1)[1].split("\n", 1)[0]
+        src = body.split("**Source:** ", 1)[1].split("\n", 1)[0]
+        out.append(f"{m.group(1)} [{m.group(2)}] ({m.group(4)}) {dec} | from {src}")
+    return out
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("plan", type=Path)
+    ap.add_argument("--ledger", type=Path)
+    a = ap.parse_args()
+    ledger = a.ledger or ledger_path(a.plan)
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.touch()
+    source = str(a.plan.resolve()).replace(str(Path.home()), "~")
+
+    with open(ledger, "r+") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        text = fh.read() or SKELETON.format(name=ledger.parent.name)
+        prompt = PROMPT.format(ledger="\n".join(entries(text)) or "(empty)",
+                               source=source, plan=a.plan.read_text())
+        raw = subprocess.run(["claude", "-p", prompt], capture_output=True,
+                             text=True, check=True).stdout
+        found = json.loads(raw[raw.index("{"):raw.rindex("}") + 1])["decisions"]
+
+        ids = [int(i[2:]) for i in re.findall(r"^### (D-\d{4})", text, re.M)]
+        nxt = max(ids, default=0) + 1
+        today = date.today().isoformat()
+        known = {m.group(1) for m in HEAD.finditer(text) if m.group(4) == "active"}
+        for d in found:
+            did = f"D-{nxt:04d}"
+            nxt += 1
+            text += (f"\n### {did} · {d['domain']} · {today} · active\n"
+                     f"**Decision:** {d['decision']}\n**Why:** {d['why']}\n"
+                     f"**Rejected:** {d['rejected'] or '—'}\n**Source:** {source}\n")
+            old = d.get("reverses")
+            if old in known:
+                text = re.sub(rf"^(### {old} · .+ · )active$",
+                              rf"\g<1>superseded by {did}", text, flags=re.M)
+                text = text.replace("## Unread reversals\n",
+                                    f"## Unread reversals\n- {did} reverses {old} ({today}, {source})\n", 1)
+                print(f"REVERSAL: {did} reverses {old}: {d['decision']}")
+            print(f"{did} [{d['domain']}] {d['decision']}")
+        fh.seek(0)
+        fh.truncate()
+        fh.write(text)
+    print(f"{len(found)} new decision(s) -> {ledger}")
+
+
+if __name__ == "__main__":
+    main()

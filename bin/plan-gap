@@ -1,0 +1,33 @@
+#!/bin/bash
+# plan-gap <plan.md> — cold-read a saved plan and list what a fresh session would
+# still have to ask. Run this before /clear: non-empty output is the quality you'd
+# lose by clearing. Fix the gaps in the plan, re-run, then clear.
+#
+# Why: measured 2026-08-09 on a real plan. A cleared session had 13 blocking
+# questions; only 2 were missing rationale. The rest were identifiers — commit SHA,
+# repo, branch, run commands, type shapes, current state.
+set -euo pipefail
+
+[[ $# -eq 1 ]] || { echo "usage: plan-gap <plan.md>" >&2; exit 2; }
+[[ -f "$1" ]] || { echo "plan-gap: no such file: $1" >&2; exit 2; }
+plan="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+
+read -r -d '' PROMPT <<'EOF' || true
+You have been handed the plan below and nothing else — no prior conversation, no
+repo access yet. You must execute its first phase.
+
+List ONLY the concrete things you would have to ask the author or rediscover
+before you could start, because the plan does not state them. Be specific. Group
+under these headings, omitting any that are empty:
+ANCHOR-MISSING (repo/branch/commit SHA) / RUN-IT-MISSING (build, test, boot,
+ports, profiles) / SHAPES-MISSING (types, enums, vocabularies named but not
+defined) / DECISIONS-NOT-RECORDED (conclusions without the eliminations) /
+ALREADY-TRUE-UNKNOWN (existing branches, merged prerequisites, known bugs).
+Max 12 bullets. If the plan is genuinely self-contained, reply exactly: NO GAPS.
+
+--- PLAN ---
+EOF
+
+cd "$(dirname "$plan")"
+claude -p "${PROMPT}
+$(cat "$plan")"

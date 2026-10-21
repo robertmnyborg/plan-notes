@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan diff</title>
+<style>
+:root {
+  --bg: #ffffff; --text: #1f2328; --muted: #656d76; --line: #d0d7de; --gutter: #f6f8fa;
+  --del: #ffebe9; --del-strong: #ffc1bc; --add: #e6ffec; --add-strong: #abf2bc; --empty: #f6f8fa;
+  --note: #fff8c5; --note-line: #d4a72c; --note-text: #3b2e00; --accent: #0969da;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1117; --text: #e6edf3; --muted: #8d96a0; --line: #30363d; --gutter: #161b22;
+    --del: #3c1618; --del-strong: #8e1519; --add: #12261e; --add-strong: #1f6f3a; --empty: #161b22;
+    --note: #3a3012; --note-line: #9e7a1e; --note-text: #f2e2a8; --accent: #4493f8;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); }
+.bar { padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
+.bar h1 { font-size: 15px; margin: 0; font-weight: 600; }
+.stat { font-size: 13px; color: var(--muted); }
+.stat b { color: var(--text); }
+.sp { flex: 1; }
+button { font: inherit; font-size: 13px; cursor: pointer; border-radius: 6px; border: 1px solid var(--line); background: var(--gutter); color: var(--text); padding: 4px 10px; }
+button:hover { border-color: var(--muted); }
+button.primary { background: #1f883d; border-color: #1f883d; color: #fff; }
+.cmd { padding: 0 16px 10px; font-size: 12px; color: var(--muted); }
+.cmd code { background: var(--gutter); border: 1px solid var(--line); padding: 1px 6px; border-radius: 5px; cursor: pointer; color: var(--text); word-break: break-all; }
+.heads, .row { display: grid; grid-template-columns: 44px minmax(0,1fr) 44px minmax(0,1fr); }
+.heads { position: sticky; top: var(--hh, 80px); z-index: 4; background: var(--gutter); border-bottom: 1px solid var(--line); font-size: 12px; font-weight: 600; color: var(--muted); }
+.heads div { padding: 6px 10px; }
+.heads div:nth-child(3) { border-left: 1px solid var(--line); }
+.n { padding: 1px 8px; text-align: right; color: var(--muted); font: 12px/22px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--gutter); user-select: none; position: relative; }
+.n.r { border-left: 1px solid var(--line); }
+.c { padding: 1px 10px; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 24px; }
+.c.h { font-weight: 600; }
+.delete .l { background: var(--del); } .delete .n.l { background: var(--del-strong); }
+.insert .r { background: var(--add); } .insert .n.r { background: var(--add-strong); }
+.replace .l { background: var(--del); } .replace .r { background: var(--add); }
+.c.x { background: var(--empty) repeating-linear-gradient(135deg, transparent 0 6px, var(--line) 6px 7px); opacity: .5; }
+mark.d { background: var(--del-strong); color: inherit; border-radius: 3px; }
+mark.a { background: var(--add-strong); color: inherit; border-radius: 3px; }
+.plus { position: absolute; left: -2px; top: 2px; width: 20px; height: 20px; padding: 0; border-radius: 5px; border: 0; background: var(--accent); color: #fff; font: 600 14px/20px sans-serif; opacity: 0; }
+.row:hover .plus, .plus:focus { opacity: 1; }
+@media (hover: none) { .plus { opacity: .7; } }
+.note { display: flex; gap: 8px; align-items: flex-start; margin: 2px 0; background: var(--note); border: 1px solid var(--note-line); color: var(--note-text); border-radius: 6px; padding: 3px 8px; white-space: normal; }
+.note span { flex: 1; }
+.note .x { border: 0; background: none; color: inherit; padding: 0 2px; opacity: .6; }
+.note .x:hover { opacity: 1; }
+.editor { grid-column: 4; padding: 6px 10px 10px; border-left: 1px solid var(--line); }
+.edrow { display: grid; grid-template-columns: 44px minmax(0,1fr) 44px minmax(0,1fr); }
+.edrow .pad { grid-column: 1 / 4; }
+textarea { width: 100%; font: inherit; border: 1px solid var(--note-line); background: var(--note); color: var(--note-text); border-radius: 6px; padding: 6px 8px; min-height: 56px; resize: vertical; }
+.actions { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.hint { font-size: 12px; color: var(--muted); }
+.flash { outline: 2px solid var(--accent); outline-offset: -2px; }
+.banner { padding: 8px 16px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--line); }
+@media (max-width: 640px) {
+  .heads, .row, .edrow { grid-template-columns: 30px minmax(0,1fr) 30px minmax(0,1fr); }
+  .n { padding: 1px 4px; font-size: 11px; } .c { padding: 1px 6px; font-size: 13px; }
+}
+.tabs { display: flex; gap: 2px; border: 1px solid var(--line); border-radius: 7px; padding: 2px; background: var(--gutter); }
+.tabs button { border: 0; background: none; padding: 3px 12px; color: var(--muted); }
+.tabs button.on { background: var(--bg); color: var(--text); box-shadow: 0 0 0 1px var(--line); }
+.st { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 24px; padding: 20px 16px 80px; max-width: 1200px; margin: 0 auto; }
+.mini { position: sticky; top: calc(var(--hh, 80px) + 16px); align-self: start; display: grid; gap: 3px; }
+.mini .cap { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+.mini a { display: flex; align-items: center; gap: 6px; text-decoration: none; color: var(--muted); font-size: 11px; cursor: pointer; }
+.mini a i { flex: 0 0 22px; border-radius: 2px; background: var(--g); }
+.mini a span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mini a:hover { color: var(--text); }
+.outline { display: grid; gap: 14px; }
+.run { display: grid; grid-template-columns: minmax(0, 1.25fr) 5px minmax(0, 1fr); column-gap: 14px; row-gap: 8px; }
+.run .gbar { grid-column: 2; grid-row: 1 / span var(--n); background: var(--g); border-radius: 3px; }
+.card { grid-column: 1; border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; background: var(--bg); cursor: grab; position: relative; }
+.card.drag { opacity: .4; } .card.over { box-shadow: 0 -3px 0 var(--accent); }
+.card h3 { margin: 0; font-size: 14px; display: flex; gap: 8px; align-items: baseline; }
+.card h3 .k { color: var(--muted); font: 12px ui-monospace, Menlo, monospace; }
+.card .pv { margin: 3px 0 0; color: var(--muted); font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card .meta { display: flex; gap: 10px; align-items: center; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.st-status { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); }
+.card .tools { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; opacity: 0; }
+.card:hover .tools { opacity: 1; }
+@media (hover: none) { .card .tools { opacity: 1; } }
+.card .tools button { padding: 1px 7px; font-size: 12px; }
+.side { grid-column: 3; font-size: 13px; padding-top: 4px; }
+.side .gl { font-weight: 600; font-size: 13px; margin-bottom: 3px; cursor: text; }
+.side .pp { color: var(--muted); cursor: text; border-radius: 4px; padding: 1px 3px; margin-left: -3px; }
+.side .pp.empty { font-style: italic; opacity: .7; }
+.side .pp:hover, .side .gl:hover { background: var(--gutter); }
+.side input { width: 100%; font: inherit; font-size: 13px; padding: 3px 6px; border: 1px solid var(--accent); border-radius: 5px; background: var(--bg); color: var(--text); }
+.card .notes { display: grid; gap: 4px; margin-top: 6px; }
+.card .note { cursor: default; }
+@media (max-width: 760px) {
+  .st { grid-template-columns: minmax(0, 1fr); } .mini { display: none; }
+  .run { grid-template-columns: minmax(0, 1fr) 4px; } .side { grid-column: 1; padding: 0 0 6px 2px; }
+}
+.shape { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; margin-bottom: 16px; }
+.role { flex: 1 1 0; min-width: 84px; border: 1px solid var(--line); border-top: 3px solid var(--g); border-radius: 6px; padding: 6px 8px; font-size: 12px; }
+.role b { display: block; font-size: 12px; margin-bottom: 2px; }
+.role a { display: block; color: var(--muted); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.role a:hover { color: var(--text); }
+.role.miss { border-style: dashed; border-top-style: dashed; opacity: .75; }
+.role.miss span { color: var(--muted); font-style: italic; }
+.role.opt.miss { opacity: .4; }
+.arrow { align-self: center; color: var(--muted); font-size: 11px; margin: 0 -2px; }
+.warn { color: #cf222e; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.side .gl.inf::after { content: " · inferred"; font-weight: 400; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+<header id="hdr">
+  <div class="bar">
+    <h1 id="name">Plan</h1>
+    <div class="tabs"><button id="tStruct" onclick="setTab('struct')">Structure</button><button id="tDiff" onclick="setTab('diff')">Diff</button></div>
+    <span class="stat" id="sChanged"><b id="nChanged">0</b> changed lines</span>
+    <span class="stat"><b id="nNotes">0</b> notes</span>
+    <button id="next" title="Jump to next change (n)">Next change ↓</button>
+    <span class="sp"></span>
+    <button id="read" class="primary" title="Make the current version the new left side">Mark read</button>
+  </div>
+  <div class="cmd">Then in Claude Code: <code id="cmd" title="Click to copy"></code></div>
+</header>
+<div id="diffView">
+<div class="heads"><div></div><div>Last read</div><div></div><div>Current</div></div>
+<div id="first" class="banner" hidden>First view of this plan: nothing to compare yet. Changes show here after the plan is revised.</div>
+<main id="rows"></main>
+</div>
+<div id="structView" class="st"><aside class="mini" id="mini"></aside><div><div class="shape" id="shape"></div><div class="outline" id="outline"></div></div></div>
+<script>
+let S = null, editing = null, cursor = -1;
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const isNote = segs => segs && segs.map(s => s[0]).join('').trim().startsWith('@@');
+
+async function call(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) });
+  S = await r.json(); render();
+}
+
+function cell(segs, side, tag) {
+  if (!segs) return `<div class="c ${side} x"></div>`;
+  const text = segs.map(s => s[0]).join('');
+  const html = segs.map(([t, ch]) => ch ? `<mark class="${tag}">${esc(t)}</mark>` : esc(t)).join('');
+  return `<div class="c ${side}${/^#{1,6} /.test(text) ? ' h' : ''}">${html}</div>`;
+}
+
+function noteCell(segs, side, rn) {
+  const t = segs.map(s => s[0]).join('').trim().slice(2).trim();
+  const x = rn ? `<button class="x" title="Delete note" onclick="call('/note',{delete:${rn}})">×</button>` : '';
+  return `<div class="c ${side}"><div class="note"><span>${esc(t)}</span>${x}</div></div>`;
+}
+
+function render() {
+  $('name').textContent = S.name;
+  document.title = S.name + ' · diff';
+  $('cmd').textContent = '/plan-notes ' + S.path;
+  $('first').hidden = !S.first;
+  $('nChanged').textContent = S.rows.filter(r => r.t !== 'equal').length;
+  $('nNotes').textContent = S.rows.filter(r => isNote(r.r)).length;
+  $('rows').innerHTML = S.rows.map((r, i) => {
+    const left = r.l && isNote(r.l) ? noteCell(r.l, 'l') : cell(r.l, 'l', 'd');
+    const right = r.r && isNote(r.r) ? noteCell(r.r, 'r', r.rn) : cell(r.r, 'r', 'a');
+    const plus = r.rn ? `<button class="plus" title="Add a note after this line" onclick="edit(${r.rn})">+</button>` : '';
+    const row = `<div class="row ${r.t}" data-i="${i}">
+      <div class="n l">${r.ln ?? ''}</div>${left}
+      <div class="n r">${plus}${r.rn ?? ''}</div>${right}</div>`;
+    const ed = editing === r.rn && r.rn ? `<div class="edrow"><div class="pad"></div><div class="editor">
+      <textarea id="ta" placeholder="Note after line ${r.rn}…"></textarea>
+      <div class="actions"><button class="primary" onclick="save()">Add note</button><button onclick="cancel()">Cancel</button><span class="hint">⌘↩ to add, Esc to cancel</span></div></div></div>` : '';
+    return row + ed;
+  }).join('');
+  if (editing !== null) {
+    const ta = $('ta'); ta.focus();
+    ta.onkeydown = e => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save();
+      if (e.key === 'Escape') cancel();
+    };
+  }
+  renderStruct();
+  document.documentElement.style.setProperty('--hh', $('hdr').offsetHeight + 'px');
+}
+
+
+const PALETTE = ['#0969da', '#d6336c', '#bf8700', '#1a7f37', '#8250df', '#0a9396', '#cf222e', '#57606a'];
+let tab = 'struct', sEdit = null, dragFrom = null;
+try { tab = localStorage.getItem('pn-tab') || 'struct'; } catch (e) {}
+
+function setTab(t) {
+  tab = t;
+  try { localStorage.setItem('pn-tab', t); } catch (e) {}
+  $('diffView').hidden = t !== 'diff'; $('structView').hidden = t !== 'struct';
+  $('next').hidden = $('sChanged').hidden = t !== 'diff';
+  $('tStruct').classList.toggle('on', t === 'struct'); $('tDiff').classList.toggle('on', t === 'diff');
+  document.documentElement.style.setProperty('--hh', $('hdr').offsetHeight + 'px');
+}
+
+function sec(body) { return call('/section', body); }
+
+function renderStruct() {
+  const secs = S.sections;
+  const roles = S.roles, extra = [...new Set(secs.map(x => x.group).filter(g => g && !roles.includes(g)))].sort();
+  const col = g => !g ? 'var(--line)' : roles.includes(g) ? PALETTE[roles.indexOf(g)] : PALETTE[(roles.length + extra.indexOf(g)) % PALETTE.length];
+  const CORE = ['Goal', 'Inputs', 'Logic', 'Outputs', 'Validation'];
+  let seen = -1;
+  secs.forEach(x => { const k = CORE.indexOf(x.group); x.order = k >= 0 && k < seen ? 'out of order' : ''; if (k > seen) seen = k; });
+  const isPlan = secs.some(x => roles.includes(x.group));
+  $('shape').hidden = !isPlan;
+  $('shape').innerHTML = !isPlan ? '' : roles.map((r, k) => {
+    const hits = secs.map((x, i) => [x, i]).filter(([x]) => x.group === r);
+    const opt = !CORE.includes(r);
+    return (k ? '<span class="arrow">→</span>' : '') + `<div class="role${hits.length ? '' : ' miss'}${opt ? ' opt' : ''}" style="--g:${col(r)}"><b>${r}</b>` +
+      (hits.length ? hits.map(([x, i]) => `<a onclick="jump(${i})">${i + 1}. ${esc(x.title)}</a>`).join('') : `<span>${opt ? 'none' : 'missing'}</span>`) + '</div>';
+  }).join('');
+  const runs = [];
+  secs.forEach((x, i) => {
+    const last = runs[runs.length - 1];
+    if (last && x.group && last.group === x.group) last.items.push(i); else runs.push({ group: x.group, items: [i] });
+  });
+  const total = secs.reduce((n, x) => n + Math.max(x.words, 1), 0) || 1;
+  $('mini').innerHTML = '<div class="cap">Document</div>' + secs.map((x, i) =>
+    `<a onclick="jump(${i})" title="${esc(x.title)} · ${x.words} words"><i style="--g:${col(x.group)};height:${Math.max(6, Math.round(Math.max(x.words, 1) / total * 360))}px"></i><span>${esc(x.title)}</span></a>`).join('');
+  $('outline').innerHTML = !secs.length ? '<p class="hint">This plan has no repeated heading level, so there are no sections to arrange.</p>' :
+    runs.map(r => `<div class="run" style="--g:${col(r.group)};--n:${r.items.length}"><div class="gbar"></div>` +
+      r.items.map((i, k) => card(secs[i], i) + side(secs[i], i, k === 0 ? r : null)).join('') + '</div>').join('');
+  if (sEdit) { const el = $('sin'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }
+}
+
+function card(x, i) {
+  const notes = x.notes.map(n => `<div class="note"><span>${esc(n)}</span></div>`).join('');
+  const editor = sEdit && sEdit.op === 'note' && sEdit.i === i
+    ? `<textarea id="sin" placeholder="Note on this section…" onkeydown="sKey(event)"></textarea>
+       <div class="actions"><button class="primary" onclick="sSave()">Add note</button><button onclick="sCancel()">Cancel</button></div>` : '';
+  return `<div class="card" draggable="true" data-i="${i}" id="card${i}"
+      ondragstart="dStart(event,${i})" ondragover="dOver(event,${i})" ondragleave="this.classList.remove('over')" ondrop="dDrop(event,${i})" ondragend="dEnd()">
+    <div class="tools"><button title="Move up" onclick="mv(${i},-1)">↑</button><button title="Move down" onclick="mv(${i},1)">↓</button><button onclick="sOpen('note',${i})">+ Note</button></div>
+    <h3><span class="k">${i + 1}</span>${esc(x.title)}</h3>
+    ${x.preview ? `<p class="pv">${esc(x.preview)}</p>` : ''}
+    <div class="meta"><span>${x.words} words</span>${x.status ? `<span class="st-status">${x.status}</span>` : ''}${x.order ? `<span class="warn">${x.order}</span>` : ''}</div>
+    ${notes ? `<div class="notes">${notes}</div>` : ''}${editor}</div>`;
+}
+
+function field(op, i, val, cls, ph) {
+  if (sEdit && sEdit.op === op && sEdit.i === i)
+    return `<input id="sin" value="${esc(val)}" placeholder="${ph}" onkeydown="sKey(event)" onblur="sSave()">`;
+  return `<div class="${cls}${val ? '' : ' empty'}" onclick="sOpen('${op}',${i})">${esc(val) || ph}</div>`;
+}
+
+function side(x, i, run) {
+  const label = run ? (sEdit && sEdit.op === 'rename' && sEdit.i === i
+      ? `<input id="sin" value="${esc(run.group)}" placeholder="Group name" onkeydown="sKey(event)" onblur="sSave()">`
+      : `<div class="gl${x.inferred && run.group ? ' inf' : ''}" onclick="sOpen('rename',${i})">${esc(run.group) || '<span class="hint">+ group</span>'}</div>`) : '';
+  return `<div class="side">${label}${field('purpose', i, x.purpose, 'pp', 'Why does this section exist?')}</div>`;
+}
+
+function jump(i) { const el = $('card' + i); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 900); }
+function mv(i, d) { const to = i + d; if (to >= 0 && to < S.sections.length) sec({ index: i, op: 'move', to }); }
+function sOpen(op, i) { sEdit = { op, i }; renderStruct(); }
+function sCancel() { sEdit = null; renderStruct(); }
+function sKey(e) {
+  if (e.key === 'Escape') sCancel();
+  if (e.key === 'Enter' && (e.target.tagName === 'INPUT' || e.metaKey || e.ctrlKey)) { e.preventDefault(); sSave(); }
+}
+async function sSave() {
+  if (!sEdit) return;
+  const { op, i } = sEdit, text = $('sin').value.trim();
+  sEdit = null;
+  if (op === 'note') return text ? sec({ index: i, op, text }) : renderStruct();
+  if (op === 'rename') {
+    const old = S.sections[i].group;
+    let k = i; const ids = [];
+    while (k < S.sections.length && (k === i || (old && S.sections[k].group === old))) ids.push(k++);
+    for (const j of ids) await fetch('/section', { method: 'POST', body: JSON.stringify({ index: j, op: 'group', text }) });
+    return call('/state');
+  }
+  if (text === (S.sections[i][op] || '')) return renderStruct();
+  sec({ index: i, op, text });
+}
+function dStart(e, i) { dragFrom = i; e.currentTarget.classList.add('drag'); e.dataTransfer.effectAllowed = 'move'; }
+function dOver(e, i) { e.preventDefault(); if (i !== dragFrom) e.currentTarget.classList.add('over'); }
+function dDrop(e, i) { e.preventDefault(); e.currentTarget.classList.remove('over'); if (dragFrom !== null && i !== dragFrom) sec({ index: dragFrom, op: 'move', to: i }); dragFrom = null; }
+function dEnd() { dragFrom = null; document.querySelectorAll('.card').forEach(c => c.classList.remove('drag', 'over')); }
+
+function edit(rn) { editing = rn; render(); }
+function cancel() { editing = null; render(); }
+function save() {
+  const t = $('ta').value.trim(), after = editing;
+  editing = null;
+  t ? call('/note', { after, text: t }) : render();
+}
+
+function nextChange() {
+  const starts = [];
+  S.rows.forEach((r, i) => { if (r.t !== 'equal' && (i === 0 || S.rows[i - 1].t === 'equal')) starts.push(i); });
+  if (!starts.length) return;
+  cursor = starts.find(i => i > cursor) ?? starts[0];
+  const el = document.querySelector(`.row[data-i="${cursor}"]`);
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 900);
+}
+
+$('next').onclick = nextChange;
+document.addEventListener('keydown', e => { if (e.key === 'n' && tab === 'diff' && editing === null && !e.metaKey && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') nextChange(); });
+$('read').onclick = () => { cursor = -1; call('/read', {}); };
+$('cmd').onclick = () => navigator.clipboard.writeText($('cmd').textContent);
+
+setTab(tab);
+call('/state');
+setInterval(async () => {
+  if (editing !== null || sEdit) return;
+  const n = await (await fetch('/state')).json();
+  if (n.mtime !== S.mtime) { S = n; render(); }
+}, 1500);
+</script>
+</body>
+</html>
