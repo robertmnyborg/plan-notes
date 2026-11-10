@@ -44,7 +44,11 @@ An agent that disagrees with a note writes `no change: <reason>` in the revision
 
 ## Install
 
-Requires Python 3.9+, the `claude` CLI on PATH, and Node 18+ for the hook.
+Requires Python 3.9+, the `claude` CLI on PATH, and Node 18+ for the hook. The skill needs the scripts, so there is no one-line install.
+
+```
+git clone https://github.com/robertmnyborg/plan-notes && cd plan-notes
+```
 
 1. Copy the scripts onto your PATH:
    ```
